@@ -11,6 +11,20 @@ halaman** (bisa beberapa halaman), lalu **Selesai** dan unduh:
 Pilihan: Warna / Abu-abu / Hitam putih, dan Cepat (150 dpi) / Standar (200) /
 Tajam (300). Satu halaman sekitar 30 detik.
 
+Setelah tiap halaman muncul pilihan **Lanjut scan** atau **Selesai**. Urutan
+halaman bisa diubah (tombol ◀ ▶ atau seret), dan dokumen bisa diberi nama
+sebelum diunduh.
+
+## Tampilan
+
+Halaman contoh di bawah ini fiktif (bukan hasil scan asli).
+
+| Setelah scan: lanjut atau selesai | Atur urutan, beri nama, unduh |
+|---|---|
+| ![Popup lanjut scan](docs/screenshots/scan-lanjut.png) | ![Bagian unduh](docs/screenshots/unduh.png) |
+
+<p align="center"><img src="docs/screenshots/hp.png" alt="Tampilan di HP" width="300"><br><sub>Tampilan di HP</sub></p>
+
 ## Cara kerja
 
 - `scan_server.py`: server web, **hanya pustaka bawaan Python** (tanpa pip).
