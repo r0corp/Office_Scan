@@ -10,22 +10,28 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$JPEG = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}"
-$PNG = "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}"
+Add-Type -AssemblyName System.Drawing
 
-function Convert-Image($image, $format, $quality) {
-    $proc = New-Object -ComObject WIA.ImageProcess
-    $proc.Filters.Add($proc.FilterInfos.Item("Convert").FilterID)
-    $proc.Filters.Item(1).Properties.Item("FormatID").Value = $format
-    if ($quality) { $proc.Filters.Item(1).Properties.Item("Quality").Value = $quality }
-    return $proc.Apply($image)
+# Hasil mentah (BMP dari driver) -> JPG + PNG lewat .NET. Konversi WIA.ImageProcess
+# gagal saat dijalankan dari service ("Unable to cast ... Int32 to String").
+function Save-JpgPng([string]$src, [string]$base) {
+    $img = [System.Drawing.Image]::FromFile($src)
+    try {
+        $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" }
+        $params = New-Object System.Drawing.Imaging.EncoderParameters 1
+        $params.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), ([long]88)
+        $img.Save("$base.jpg", $codec, $params)
+        $img.Save("$base.png", [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally { $img.Dispose() }
 }
 
 function Set-WiaProperty($item, [string]$id, [int]$value) {
     try { $item.Properties.Item($id).Value = $value } catch { }   # ditolak driver -> bawaan
 }
 
+$step = "mulai"
 try {
+    $step = "cari scanner"
     $dm = New-Object -ComObject WIA.DeviceManager
     $info = $null
     foreach ($d in $dm.DeviceInfos) {
@@ -33,22 +39,27 @@ try {
     }
     if (-not $info) { throw "Scanner tidak ditemukan. Pastikan printer EPSON L3210 menyala dan terhubung ke server." }
 
+    $step = "sambung ke scanner"
     $item = $info.Connect().Items.Item(1)
     # 6146 = jenis gambar (1 warna, 2 abu-abu, 4 hitam-putih), 6147/6148 = DPI.
     Set-WiaProperty $item "6146" (@{ warna = 1; abu = 2; hitamputih = 4 }[$Mode])
     Set-WiaProperty $item "6147" $Dpi
     Set-WiaProperty $item "6148" $Dpi
 
+    $step = "scan"
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $raw = $item.Transfer()
-    $jpg = if ($raw.FormatID -eq $JPEG) { $raw } else { Convert-Image $raw $JPEG 88 }
-    $png = if ($raw.FormatID -eq $PNG) { $raw } else { Convert-Image $raw $PNG $null }
-    foreach ($ext in "jpg", "png") { if (Test-Path "$OutBase.$ext") { Remove-Item "$OutBase.$ext" -Force } }
-    $jpg.SaveFile("$OutBase.jpg")
-    $png.SaveFile("$OutBase.png")
+    $width = $raw.Width; $height = $raw.Height
 
-    @{ ok = $true; width = $raw.Width; height = $raw.Height; seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1) } |
+    $step = "simpan hasil"
+    $tmp = "$OutBase.raw"
+    foreach ($f in $tmp, "$OutBase.jpg", "$OutBase.png") { if (Test-Path $f) { Remove-Item $f -Force } }
+    $raw.SaveFile($tmp)
+    $step = "ubah ke JPG/PNG"
+    try { Save-JpgPng $tmp $OutBase } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+
+    @{ ok = $true; width = $width; height = $height; seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1) } |
         ConvertTo-Json -Compress
 } catch {
-    @{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+    @{ ok = $false; error = "Gagal saat ${step}: $($_.Exception.Message)" } | ConvertTo-Json -Compress
 }
