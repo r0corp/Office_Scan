@@ -64,6 +64,26 @@ def test_scan_pages_and_download_pdf_jpg_png(base):
     assert json.loads(call(base, "/api/reset", {"batch": BATCH})[2])["pages"] == []
 
 
+def test_page_order_and_document_name(base):
+    batch = "b1b2c3d4e5f6a7b8c9d0e1f2"
+    for _ in range(3):
+        call(base, "/api/scan", {"batch": batch})
+    # Halaman 3 dipindah ke depan; halaman baru menyusul di belakang.
+    order = ["page-003", "page-001", "page-002"]
+    assert json.loads(call(base, "/api/order", {"batch": batch, "pages": order})[2])["pages"] == order
+    call(base, "/api/scan", {"batch": batch})
+    assert json.loads(call(base, f"/api/status?batch={batch}")[2])["pages"] == order + ["page-004"]
+    # Urutan harus berisi persis halaman yang ada.
+    assert call(base, "/api/order", {"batch": batch, "pages": ["page-001"]})[0] == 400
+
+    status, _ct, data = call(base, f"/api/download?batch={batch}&format=jpg&name=Kontrak%20PT%20ABC%2F01")
+    names = sorted(zipfile.ZipFile(io.BytesIO(data)).namelist())
+    assert names[0] == "Kontrak PT ABC 01-hal01.jpg"
+    with urllib.request.urlopen(base + f"/api/download?batch={batch}&format=pdf&name=Surat%20Kuasa") as r:
+        assert 'filename="Surat Kuasa.pdf"' in r.headers["Content-Disposition"]
+    assert scan_server.clean_filename(' ..\\a:b*?"<>| ') == "a b"
+
+
 def test_invalid_input_and_busy_scanner(base):
     assert call(base, "/api/scan", {"batch": "../etc"})[0] == 400
     assert call(base, "/api/page/a1b2c3d4e5f6a7b8/..%2Fx.jpg")[0] == 404

@@ -46,6 +46,18 @@
     .page .no { position: absolute; left: 8px; top: 8px; background: rgba(31,41,55,.8); color: #fff; font-size: .75rem; padding: 2px 8px; border-radius: 20px; }
     .page .del { position: absolute; right: 6px; top: 6px; width: 28px; height: 28px; border-radius: 50%; border: 0; background: rgba(255,255,255,.95);
                  color: var(--red); font-size: 1rem; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+    .page .move { display: flex; border-top: 1px solid var(--line); }
+    .page .move button { flex: 1; border: 0; background: #fff; padding: 7px 0; font: inherit; font-size: .85rem; color: var(--ink); cursor: pointer; }
+    .page .move button + button { border-left: 1px solid var(--line); }
+    .page .move button:hover:not(:disabled) { background: var(--soft); color: var(--red); }
+    .page .move button:disabled { color: #d1d5db; cursor: default; }
+    .page[draggable="true"] { cursor: grab; }
+    .page.dragging { opacity: .4; }
+    .page.drop-target { outline: 2px solid var(--red); outline-offset: 2px; }
+    .name-field { display: block; margin-top: 12px; font-size: .85rem; font-weight: 600; color: var(--muted); }
+    .name-field input { display: block; width: 100%; margin-top: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+                        font: inherit; font-size: .95rem; color: var(--ink); }
+    .name-field input:focus { outline: none; border-color: var(--red); box-shadow: 0 0 0 3px rgba(185,28,28,.12); }
     .empty { border: 2px dashed var(--line); border-radius: 12px; padding: 48px 16px; text-align: center; color: var(--muted); }
     .done { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); display: none; }
     .done.show { display: block; }
@@ -105,6 +117,9 @@
         <div id="pages"></div>
         <div class="done" id="done">
             <b>Unduh hasil scan</b> <span class="hint" id="done-info"></span>
+            <label class="name-field">Nama dokumen
+                <input id="doc-name" maxlength="80" placeholder="mis. Kontrak PT ABC" autocomplete="off">
+            </label>
             <div class="row">
                 <a class="btn" id="dl-pdf">PDF (semua halaman)</a>
                 <a class="btn ghost" id="dl-jpg">JPG</a>
@@ -162,15 +177,55 @@
             $("done").classList.remove("show");
             return;
         }
+        const last = pages.length - 1;
         box.innerHTML = '<div class="grid">' + pages.map((p, i) =>
-            `<div class="page"><img src="/api/page/${batch}/${p}.jpg?t=${Date.now()}" alt="Halaman ${i + 1}" data-src="/api/page/${batch}/${p}.jpg">
-             <span class="no">Hal ${i + 1}</span><button class="del" data-p="${p}" title="Hapus halaman ini">✕</button></div>`).join("") + "</div>";
-        const q = `batch=${batch}&dpi=${opts.dpi}`;
+            `<div class="page" draggable="true" data-i="${i}"><img src="/api/page/${batch}/${p}.jpg" alt="Halaman ${i + 1}" data-src="/api/page/${batch}/${p}.jpg" draggable="false">
+             <span class="no">Hal ${i + 1}</span><button class="del" data-p="${p}" title="Hapus halaman ini">✕</button>
+             <div class="move"><button data-move="-1" data-i="${i}" title="Pindah ke depan" ${i === 0 ? "disabled" : ""}>◀</button>
+             <button data-move="1" data-i="${i}" title="Pindah ke belakang" ${i === last ? "disabled" : ""}>▶</button></div></div>`).join("") + "</div>";
+        updateLinks();
+        $("done-info").textContent = `· ${pages.length} halaman`;
+    }
+
+    function updateLinks() {
+        const name = $("doc-name").value.trim();
+        const q = `batch=${batch}&dpi=${opts.dpi}` + (name ? `&name=${encodeURIComponent(name)}` : "");
         $("dl-pdf").href = `/api/download?${q}&format=pdf`;
         $("dl-jpg").href = `/api/download?${q}&format=jpg`;
         $("dl-png").href = `/api/download?${q}&format=png`;
-        $("done-info").textContent = `· ${pages.length} halaman`;
     }
+    $("doc-name").addEventListener("input", updateLinks);
+
+    // Urutan halaman: tombol ◀ ▶ atau seret kartu ke posisi lain.
+    async function moveTo(from, to) {
+        if (from === to || to < 0 || to >= pages.length) return;
+        const order = pages.slice();
+        order.splice(to, 0, order.splice(from, 1)[0]);
+        pages = order; render();
+        try { pages = (await post("/api/order", { pages: order })).pages; }
+        catch (e) { setStatus(e.message, "err"); }
+        render();
+    }
+    let dragFrom = null;
+    $("pages").addEventListener("dragstart", e => {
+        const card = e.target.closest(".page"); if (!card) return;
+        dragFrom = +card.dataset.i; card.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+    });
+    $("pages").addEventListener("dragover", e => {
+        const card = e.target.closest(".page"); if (dragFrom === null || !card) return;
+        e.preventDefault();
+        document.querySelectorAll(".drop-target").forEach(x => x !== card && x.classList.remove("drop-target"));
+        card.classList.add("drop-target");
+    });
+    $("pages").addEventListener("drop", e => {
+        const card = e.target.closest(".page"); if (dragFrom === null || !card) return;
+        e.preventDefault(); moveTo(dragFrom, +card.dataset.i);
+    });
+    $("pages").addEventListener("dragend", () => {
+        dragFrom = null;
+        document.querySelectorAll(".dragging, .drop-target").forEach(x => x.classList.remove("dragging", "drop-target"));
+    });
 
     async function post(url, data) {
         const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -209,6 +264,8 @@
     $("ask-done").addEventListener("click", () => { $("ask").classList.remove("show"); $("finish-btn").click(); });
 
     $("pages").addEventListener("click", async e => {
+        const mv = e.target.closest("[data-move]");
+        if (mv) { moveTo(+mv.dataset.i, +mv.dataset.i + +mv.dataset.move); return; }
         const del = e.target.closest(".del");
         if (del) {
             if (!confirm("Hapus halaman ini?")) return;

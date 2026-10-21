@@ -27,7 +27,7 @@ import zipfile
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("SCAN_DATA") or os.path.join(BASE, "data")
@@ -64,7 +64,30 @@ def pages(batch):
     if not os.path.isdir(folder):
         return []
     names = sorted(n[:-4] for n in os.listdir(folder) if n.endswith(".jpg") and PAGE_RE.match(n[:-4]))
-    return names
+    # Urutan pilihan pengguna (order.json); halaman baru menyusul di belakang.
+    try:
+        with open(os.path.join(folder, "order.json"), encoding="utf-8") as f:
+            order = [n for n in json.load(f) if n in names]
+    except (OSError, ValueError, TypeError):
+        order = []
+    return order + [n for n in names if n not in order]
+
+
+def save_order(batch, names):
+    with open(os.path.join(batch_dir(batch), "order.json"), "w", encoding="utf-8") as f:
+        json.dump(names, f)
+
+
+def content_disposition(fname):
+    # filename= ASCII untuk browser lama, filename*= UTF-8 untuk nama ber-aksen.
+    ascii_name = fname.encode("ascii", "replace").decode().replace("?", "_")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(fname)}"
+
+
+def clean_filename(name):
+    """Nama dokumen dari pengguna -> nama file aman (tanpa karakter terlarang Windows)."""
+    name = re.sub(r'[\x00-\x1f<>:"/\\|?*]+', " ", name or "")
+    return re.sub(r"\s+", " ", name).strip(" .")[:80]
 
 
 def next_page_name(batch):
@@ -265,26 +288,26 @@ class Handler(BaseHTTPRequestHandler):
             if not names or fmt not in ("pdf", "jpg", "png"):
                 return self._send(400, {"error": "Belum ada halaman yang di-scan."})
             dpi = int(q.get("dpi", "200")) if q.get("dpi", "200").isdigit() else 200
-            stamp = datetime.now().strftime("%Y%m%d-%H%M")
+            title = clean_filename(q.get("name")) or "scan-" + datetime.now().strftime("%Y%m%d-%H%M")
             folder = batch_dir(batch)
             if fmt == "pdf":
                 jpegs = []
                 for n in names:
                     with open(os.path.join(folder, n + ".jpg"), "rb") as f:
                         jpegs.append(f.read())
-                data, ctype, fname = build_pdf(jpegs, dpi), "application/pdf", f"scan-{stamp}.pdf"
+                data, ctype, fname = build_pdf(jpegs, dpi), "application/pdf", f"{title}.pdf"
             elif len(names) == 1:
                 with open(os.path.join(folder, names[0] + "." + fmt), "rb") as f:
                     data = f.read()
-                ctype, fname = ("image/jpeg" if fmt == "jpg" else "image/png"), f"scan-{stamp}.{fmt}"
+                ctype, fname = ("image/jpeg" if fmt == "jpg" else "image/png"), f"{title}.{fmt}"
             else:
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
                     for i, n in enumerate(names, start=1):
-                        zf.write(os.path.join(folder, n + "." + fmt), f"scan-{stamp}-hal{i:02d}.{fmt}")
-                data, ctype, fname = buf.getvalue(), "application/zip", f"scan-{stamp}-{fmt}.zip"
+                        zf.write(os.path.join(folder, n + "." + fmt), f"{title}-hal{i:02d}.{fmt}")
+                data, ctype, fname = buf.getvalue(), "application/zip", f"{title}-{fmt}.zip"
             log(f"unduh {fmt} {len(names)} hal dari {self.client_address[0]}")
-            return self._send(200, data, ctype, {"Content-Disposition": f'attachment; filename="{fname}"'})
+            return self._send(200, data, ctype, {"Content-Disposition": content_disposition(fname)})
 
         return self._send(404, {"error": "tidak ditemukan"})
 
@@ -322,6 +345,13 @@ class Handler(BaseHTTPRequestHandler):
                     path = os.path.join(batch_dir(batch), name + ext)
                     if os.path.exists(path):
                         os.remove(path)
+            return self._send(200, {"ok": True, "pages": pages(batch)})
+
+        if url.path == "/api/order":
+            current, wanted = pages(batch), body.get("pages")
+            if not isinstance(wanted, list) or sorted(wanted) != sorted(current):
+                return self._send(400, {"error": "Urutan halaman tidak valid. Muat ulang halaman."})
+            save_order(batch, wanted)
             return self._send(200, {"ok": True, "pages": pages(batch)})
 
         if url.path == "/api/reset":
