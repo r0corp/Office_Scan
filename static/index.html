@@ -50,6 +50,13 @@
     .done { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); display: none; }
     .done.show { display: block; }
     .done .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+    .ask { position: fixed; inset: 0; background: rgba(17,24,39,.45); display: none; align-items: center; justify-content: center; z-index: 9; padding: 16px; }
+    .ask.show { display: flex; }
+    .ask .box { background: var(--card); border-radius: 14px; padding: 22px; width: 100%; max-width: 400px; box-shadow: 0 10px 30px rgba(0,0,0,.2); }
+    .ask h3 { margin: 0 0 6px; font-size: 1.05rem; }
+    .ask p { margin: 0 0 16px; color: var(--muted); font-size: .9rem; line-height: 1.5; }
+    .ask .row { display: flex; gap: 10px; }
+    .ask .row .btn { flex: 1; }
     .viewer { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center; z-index: 10; cursor: zoom-out; }
     .viewer.show { display: flex; }
     .viewer img { max-width: 94vw; max-height: 94vh; background: #fff; }
@@ -108,6 +115,17 @@
     </section>
 </main>
 
+<div class="ask" id="ask" role="dialog" aria-modal="true" aria-labelledby="ask-title">
+    <div class="box">
+        <h3 id="ask-title">Halaman 1 berhasil di-scan</h3>
+        <p>Masih ada halaman lain? Ganti kertas di kaca scanner dulu, lalu klik <b>Lanjut scan</b>.</p>
+        <div class="row">
+            <button class="btn ghost" id="ask-done">Selesai</button>
+            <button class="btn" id="ask-next">Lanjut scan</button>
+        </div>
+    </div>
+</div>
+
 <div class="viewer" id="viewer"><img alt=""></div>
 
 <script>
@@ -137,6 +155,7 @@
         const box = $("pages");
         $("pages-title").textContent = pages.length ? `Halaman (${pages.length})` : "Halaman";
         $("finish-btn").disabled = !pages.length;
+        if (!scanning) $("scan-btn").textContent = pages.length ? `Scan halaman ${pages.length + 1}` : "Scan halaman";
         $("reset-btn").disabled = !pages.length;
         if (!pages.length) {
             box.innerHTML = '<div class="empty">Belum ada halaman. Klik <b>Scan halaman</b> untuk mulai.</div>';
@@ -171,17 +190,23 @@
         try {
             const r = await post("/api/scan", { mode: opts.mode, dpi: opts.dpi });
             pages = r.pages;
-            setStatus(`Halaman ${pages.length} selesai (${r.seconds || "-"} detik). Ganti kertas untuk halaman berikutnya.`, "ok");
+            setStatus(`Halaman ${pages.length} selesai (${r.seconds || "-"} detik).`, "ok");
             render();
+            $("ask-title").textContent = `Halaman ${pages.length} berhasil di-scan`;
+            $("ask").classList.add("show");
         } catch (e) {
             setStatus(e.message, "err");
         } finally {
             clearInterval(tick);
             scanning = false;
             btn.disabled = false;
-            btn.textContent = "Scan halaman";
+            btn.textContent = pages.length ? `Scan halaman ${pages.length + 1}` : "Scan halaman";
         }
     });
+
+    // Setelah tiap scan: lanjut halaman berikutnya, atau selesai dan unduh.
+    $("ask-next").addEventListener("click", () => { $("ask").classList.remove("show"); $("scan-btn").click(); });
+    $("ask-done").addEventListener("click", () => { $("ask").classList.remove("show"); $("finish-btn").click(); });
 
     $("pages").addEventListener("click", async e => {
         const del = e.target.closest(".del");
