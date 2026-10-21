@@ -349,7 +349,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if url.path == "/api/order":
             current, wanted = pages(batch), body.get("pages")
-            if not isinstance(wanted, list) or sorted(wanted) != sorted(current):
+            if not current or not isinstance(wanted, list) or sorted(wanted) != sorted(current):
                 return self._send(400, {"error": "Urutan halaman tidak valid. Muat ulang halaman."})
             save_order(batch, wanted)
             return self._send(200, {"ok": True, "pages": pages(batch)})
